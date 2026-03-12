@@ -35,12 +35,15 @@ class Wallet:
     balance: float
     leverage: int
     margin_per_trade: float
-    fee_rate: float
+    maker_fee: float          # limit orders (TP/SL exits)
+    taker_fee: float          # market orders (entry/reversal)
     total_trades: int = 0
     winning_trades: int = 0
     losing_trades: int = 0
     total_pnl: float = 0.0
     total_fees: float = 0.0
+    maker_fees: float = 0.0
+    taker_fees: float = 0.0
 
 
 class Simulator:
@@ -49,12 +52,18 @@ class Simulator:
     def __init__(self, config: dict) -> None:
         trading = config["trading"]
         self._risk_mgr = RiskManager(config)
+
+        # Support both old single fee_rate and new maker/taker split
+        maker = trading.get("maker_fee", trading.get("fee_rate", 0.0002))
+        taker = trading.get("taker_fee", trading.get("fee_rate", 0.0005))
+
         self.wallet = Wallet(
             initial_balance=trading["initial_balance"],
             balance=trading["initial_balance"],
             leverage=trading["leverage"],
             margin_per_trade=trading["margin_per_trade"],
-            fee_rate=trading["fee_rate"],
+            maker_fee=maker,
+            taker_fee=taker,
         )
         # Active positions: symbol → PositionState
         self._positions: dict[str, PositionState] = {}
@@ -96,11 +105,12 @@ class Simulator:
         pos = self._risk_mgr.open_position(signal.symbol, signal.side, signal.price)
         self._positions[signal.symbol] = pos
 
-        # Deduct margin from balance
+        # Entry fee — market order = taker fee
         notional = margin * self.wallet.leverage
-        entry_fee = notional * self.wallet.fee_rate
+        entry_fee = notional * self.wallet.taker_fee
         self.wallet.balance -= entry_fee
         self.wallet.total_fees += entry_fee
+        self.wallet.taker_fees += entry_fee
 
         return closed_trades
 
@@ -122,11 +132,13 @@ class Simulator:
             pnl_pct = (pos.entry_price - exit_price) / pos.entry_price * 100
 
         pnl_usdt = trade_notional * pnl_pct / 100
-        exit_fee = trade_notional * self.wallet.fee_rate
+        # Reversal close = market order = taker fee
+        exit_fee = trade_notional * self.wallet.taker_fee
 
         self.wallet.balance += pnl_usdt - exit_fee
         self.wallet.total_pnl += pnl_usdt
         self.wallet.total_fees += exit_fee
+        self.wallet.taker_fees += exit_fee
         self.wallet.total_trades += 1
         if pnl_usdt > 0:
             self.wallet.winning_trades += 1
@@ -191,12 +203,14 @@ class Simulator:
             pnl_pct = (pos.entry_price - exit_ev.price) / pos.entry_price * 100
 
         pnl_usdt = trade_notional * pnl_pct / 100
-        exit_fee = trade_notional * self.wallet.fee_rate
+        # TP/SL exits = limit order = maker fee
+        exit_fee = trade_notional * self.wallet.maker_fee
 
         # Update wallet
         self.wallet.balance += pnl_usdt - exit_fee
         self.wallet.total_pnl += pnl_usdt
         self.wallet.total_fees += exit_fee
+        self.wallet.maker_fees += exit_fee
         self.wallet.total_trades += 1
         if pnl_usdt > 0:
             self.wallet.winning_trades += 1
@@ -243,5 +257,7 @@ class Simulator:
             "losing_trades": self.wallet.losing_trades,
             "win_rate": round(win_rate, 2),
             "total_fees": round(self.wallet.total_fees, 4),
+            "maker_fees": round(self.wallet.maker_fees, 4),
+            "taker_fees": round(self.wallet.taker_fees, 4),
             "leverage": self.wallet.leverage,
         }

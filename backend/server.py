@@ -17,6 +17,7 @@ from core.data.binance_rest import BinanceRest
 from core.data.binance_ws import BinanceWS
 from core.strategy.signals import SignalEngine
 from core.engine.simulator import Simulator, Trade
+from core.engine.backtester import Backtester
 from core.strategy.risk_manager import RiskManager
 
 import pandas as pd
@@ -442,7 +443,8 @@ def get_status():
     positions = []
     margin = cfg["trading"]["margin_per_trade"]
     leverage = cfg["trading"]["leverage"]
-    fee_rate = cfg["trading"]["fee_rate"]
+    maker_fee = cfg["trading"].get("maker_fee", cfg["trading"].get("fee_rate", 0.0002))
+    taker_fee = cfg["trading"].get("taker_fee", cfg["trading"].get("fee_rate", 0.0005))
 
     if sim:
         # IMPORTANT: iterate over a snapshot — process_candle may delete from the dict
@@ -494,8 +496,8 @@ def get_status():
                 upnl_pct = (pos.entry_price - mark_price) / pos.entry_price * 100
             upnl_usdt = position_notional * upnl_pct / 100
 
-            # Break-even price (entry + entry fee + exit fee estimate)
-            total_fee_pct = fee_rate * 2  # entry + exit
+            # Break-even price (entry taker fee + exit maker fee estimate)
+            total_fee_pct = taker_fee + maker_fee
             if pos.side == "LONG":
                 break_even = pos.entry_price * (1 + total_fee_pct)
             else:
@@ -505,9 +507,9 @@ def get_status():
             realized = sum(t.pnl_usdt for t in sim.trades if t.symbol == sym)
             realized_fees = sum(t.fee_usdt for t in sim.trades if t.symbol == sym)
 
-            # Entry fee for this position (always paid on open)
+            # Entry fee for this position (market order = taker fee)
             full_notional = margin * leverage
-            entry_fee = full_notional * fee_rate
+            entry_fee = full_notional * taker_fee
 
             # Total fees = entry fee + any exit fees from partial TPs
             total_fees_for_pos = entry_fee + realized_fees
@@ -540,11 +542,10 @@ def get_status():
         stats = sim.get_stats()
 
     # Fee breakdown
-    total_fees = stats["total_fees"] if sim else 0
     fee_breakdown = {
-        "maker": 0.0,
-        "taker": round(total_fees, 4),
-        "total": round(total_fees, 4),
+        "maker": round(stats.get("maker_fees", 0), 4),
+        "taker": round(stats.get("taker_fees", 0), 4),
+        "total": round(stats.get("total_fees", 0), 4),
     }
 
     # Per-pair summary with LIVE prices
@@ -617,3 +618,96 @@ def get_status():
             "net_pnl": round(total_unrealized + total_realized - fee_breakdown["total"], 4),
         },
     }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# BACKTEST ENDPOINTS — completely independent from dry-run
+# ══════════════════════════════════════════════════════════════════════
+
+_bt_state: dict[str, Any] = {
+    "running": False,
+    "instance": None,
+    "result": None,
+    "error": None,
+}
+
+
+def _run_backtest(symbols: list[str], lookback_days: int, config: dict) -> None:
+    """Background thread target for backtesting."""
+    try:
+        bt = Backtester(config)
+        _bt_state["instance"] = bt
+        result = bt.run(symbols, lookback_days)
+        _bt_state["result"] = {
+            "trades": result.trades,
+            "equity_curve": result.equity_curve,
+            "drawdown_curve": result.drawdown_curve,
+            "metrics": result.metrics,
+            "per_symbol": result.per_symbol,
+        }
+    except Exception as e:
+        logger.error("Backtest failed: %s", str(e)[:200])
+        _bt_state["error"] = str(e)
+    finally:
+        _bt_state["running"] = False
+
+
+@app.post("/api/backtest/run")
+def start_backtest(body: dict):
+    """Start a backtest in a background thread."""
+    if _bt_state["running"]:
+        return {"error": "Backtest already running"}
+
+    symbols = body.get("symbols", [])
+    if not symbols:
+        return {"error": "No symbols provided"}
+
+    lookback_days = body.get("lookback_days", 30)
+    config = body.get("config", state["config"])
+
+    _bt_state["running"] = True
+    _bt_state["result"] = None
+    _bt_state["error"] = None
+    _bt_state["instance"] = None
+
+    thread = threading.Thread(
+        target=_run_backtest,
+        args=(symbols, lookback_days, config),
+        daemon=True,
+    )
+    thread.start()
+
+    return {"status": "started", "symbols": len(symbols), "lookback_days": lookback_days}
+
+
+@app.get("/api/backtest/status")
+def backtest_status():
+    """Poll backtest progress."""
+    bt = _bt_state.get("instance")
+    return {
+        "running": _bt_state["running"],
+        "progress": round(bt.progress, 1) if bt else (100.0 if _bt_state["result"] else 0),
+        "status": bt.status if bt else ("done" if _bt_state["result"] else "idle"),
+        "error": _bt_state["error"],
+    }
+
+
+@app.get("/api/backtest/results")
+def backtest_results():
+    """Return full backtest results."""
+    result = _bt_state["result"]
+    if not result:
+        return {"status": "no_results"}
+    return result
+
+
+@app.post("/api/backtest/reset")
+def backtest_reset():
+    """Reset backtest state so a new one can be started."""
+    if _bt_state["running"]:
+        return {"error": "Backtest is still running"}
+    _bt_state["running"] = False
+    _bt_state["instance"] = None
+    _bt_state["result"] = None
+    _bt_state["error"] = None
+    return {"status": "reset"}

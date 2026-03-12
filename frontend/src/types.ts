@@ -107,7 +107,8 @@ export interface Config {
     margin_per_trade: number;
     leverage: number;
     trade_type: string;
-    fee_rate: number;
+    maker_fee: number;
+    taker_fee: number;
     max_pairs: number;
   };
   strategy: {
@@ -131,4 +132,75 @@ export interface Config {
     tp3_qty: number;
     stop_loss: number;
   };
+}
+
+// ── Backtest Types ──
+
+export interface BacktestMetrics {
+  initial_balance: number;
+  current_balance: number;
+  total_pnl: number;
+  total_pnl_pct: number;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number;
+  total_fees: number;
+  leverage: number;
+  profit_factor: number;
+  max_drawdown_usdt: number;
+  max_drawdown_pct: number;
+  max_runup_usdt: number;
+  max_runup_pct: number;
+  gross_profit: number;
+  gross_loss: number;
+  avg_win: number;
+  avg_loss: number;
+  sharpe_ratio: number;
+  total_symbols: number;
+}
+
+export interface EquityPoint {
+  time: number;
+  equity: number;
+}
+
+export interface DrawdownPoint {
+  time: number;
+  drawdown_pct: number;
+  runup_pct: number;
+}
+
+export interface BacktestTrade {
+  id: number;
+  symbol: string;
+  side: string;
+  entry_price: number;
+  exit_price: number;
+  exit_reason: string;
+  pnl_usdt: number;
+  pnl_pct: number;
+  fee_usdt: number;
+  leverage: number;
+}
+
+export interface PerSymbolMetrics {
+  symbol: string;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number;
+  total_pnl: number;
+  total_fees: number;
+  profit_factor: number;
+  avg_win: number;
+  avg_loss: number;
+}
+
+export interface BacktestResult {
+  trades: BacktestTrade[];
+  equity_curve: EquityPoint[];
+  drawdown_curve: DrawdownPoint[];
+  metrics: BacktestMetrics;
+  per_symbol: PerSymbolMetrics[];
 }
