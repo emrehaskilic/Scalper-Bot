@@ -1,0 +1,134 @@
+export interface Position {
+  symbol: string;
+  side: "LONG" | "SHORT";
+  entry_price: number;
+  mark_price: number;
+  bid: number;
+  ask: number;
+  spread: number;
+  break_even: number;
+  notional_usdt: number;
+  tp1: number;
+  tp2: number;
+  tp3: number;
+  sl: number;
+  condition: number;
+  remaining_qty: number;
+  unrealized_pnl_usdt: number;
+  unrealized_pnl_pct: number;
+  realized_pnl_usdt: number;
+  total_pnl_usdt: number;
+  fees_usdt: number;
+}
+
+export interface PairSummary {
+  last_price: number;
+  bid: number;
+  ask: number;
+  spread: number;
+  status: string;
+  trend: string;
+  side: string;
+  rsi: number;
+  unrealized_pnl: number;
+  realized_pnl: number;
+  total_pnl: number;
+  fees: number;
+  trade_count: number;
+}
+
+export interface FeeBreakdown {
+  maker: number;
+  taker: number;
+  total: number;
+}
+
+export interface Totals {
+  unrealized_pnl: number;
+  realized_pnl: number;
+  total_pnl: number;
+  total_fees: number;
+  net_pnl: number;
+}
+
+export interface Stats {
+  initial_balance: number;
+  current_balance: number;
+  total_pnl: number;
+  total_pnl_pct: number;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number;
+  total_fees: number;
+  leverage: number;
+}
+
+export interface TradeLog {
+  id: number;
+  symbol: string;
+  side: string;
+  entry_price: number;
+  exit_price: number;
+  exit_reason: string;
+  pnl_usdt: number;
+  pnl_pct: number;
+  fee_usdt: number;
+  leverage: number;
+}
+
+export interface SignalLog {
+  time: string;
+  symbol: string;
+  side: string;
+  price: number;
+  rsi: number;
+  source: string;
+}
+
+export interface StatusResponse {
+  bot_running: boolean;
+  ws_connected: boolean;
+  ws_last_ping: number;
+  price_source: string;
+  active_symbols: string[];
+  stats: Stats;
+  positions: Position[];
+  pair_summaries: Record<string, PairSummary>;
+  fees: FeeBreakdown;
+  signal_log: SignalLog[];
+  trade_log: TradeLog[];
+  totals: Totals;
+}
+
+export interface Config {
+  trading: {
+    initial_balance: number;
+    margin_per_trade: number;
+    leverage: number;
+    trade_type: string;
+    fee_rate: number;
+    max_pairs: number;
+  };
+  strategy: {
+    timeframe: string;
+    ma_type: string;
+    ma_period: number;
+    alma_offset: number;
+    alma_sigma: number;
+    use_alternate_signals: boolean;
+    alternate_multiplier: number;
+    swing_length: number;
+    history_to_keep: number;
+    supply_demand_box_width: number;
+  };
+  risk: {
+    tp1_level: number;
+    tp1_qty: number;
+    tp2_level: number;
+    tp2_qty: number;
+    tp3_level: number;
+    tp3_qty: number;
+    stop_loss: number;
+  };
+}
