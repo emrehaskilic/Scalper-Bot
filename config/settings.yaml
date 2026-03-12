@@ -6,7 +6,7 @@ exchange:
   ws_url: "wss://fstream.binance.com"
 
 strategy:
-  timeframe: "15m"
+  timeframe: "3m"
   ma_type: "ALMA"          # ALMA | TEMA | HullMA
   ma_period: 2
   alma_offset: 0.85

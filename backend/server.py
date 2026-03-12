@@ -105,6 +105,105 @@ def _stop_ws() -> None:
     _ws_loop = None
 
 
+# ── Periodic Signal Scanner — detects new crossovers while bot is running ──
+
+_TIMEFRAME_SECONDS = {
+    "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+    "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400,
+}
+
+
+def _signal_scanner_loop() -> None:
+    """Background thread: re-check crossovers every candle close."""
+    logger.info("Signal scanner started")
+    last_scan_bucket = 0
+
+    while state["bot_running"]:
+        time.sleep(5)  # check every 5s if a new candle closed
+
+        if not state["bot_running"] or not state["active_symbols"]:
+            continue
+
+        cfg = state["config"]
+        tf = cfg["strategy"]["timeframe"]
+        interval_s = _TIMEFRAME_SECONDS.get(tf, 900)
+
+        # Only scan when a new candle bucket starts
+        now = int(time.time())
+        current_bucket = now // interval_s
+        if current_bucket == last_scan_bucket:
+            continue
+        last_scan_bucket = current_bucket
+
+        # Wait a few seconds for candle to finalize on Binance
+        time.sleep(10)
+
+        logger.info("Signal scanner: new %s candle — rescanning %d symbols",
+                     tf, len(state["active_symbols"]))
+
+        sim = state["simulator"]
+        if not sim:
+            continue
+
+        rest: BinanceRest = state["rest"]
+
+        for sym in list(state["active_symbols"]):
+            if not state["bot_running"]:
+                break
+            try:
+                klines = rest.fetch_klines_sync(sym, tf, limit=1500)
+                if len(klines) < 200:
+                    continue
+
+                df = pd.DataFrame(klines)
+                df["symbol"] = sym
+
+                engine = SignalEngine(cfg)
+                signal = engine.process(df)
+
+                if signal:
+                    # Check if we need to reverse or open a new position
+                    has_pos = sim.has_position(sym)
+                    if has_pos:
+                        existing = sim.positions[sym]
+                        if existing.side == signal.side:
+                            continue  # same direction — skip
+                    # New signal or reversal
+                    reversal_trades = sim.process_signal(signal)
+                    for rt in reversal_trades:
+                        state["signal_log"].append({
+                            "time": time.strftime("%H:%M:%S"),
+                            "symbol": sym,
+                            "side": rt.side,
+                            "price": rt.exit_price,
+                            "rsi": 0,
+                            "source": f"EXIT_{rt.exit_reason}",
+                        })
+                    state["signal_log"].append({
+                        "time": time.strftime("%H:%M:%S"),
+                        "symbol": sym,
+                        "side": signal.side,
+                        "price": signal.price,
+                        "rsi": round(signal.rsi_value, 2),
+                        "source": "LIVE_SCAN",
+                    })
+                    logger.info("Signal scanner: %s %s @ %.4f",
+                                sym, signal.side, signal.price)
+
+                    # Update scan_results
+                    state["scan_results"][sym] = {
+                        "status": "signal",
+                        "side": signal.side,
+                        "price": signal.price,
+                        "rsi": round(signal.rsi_value, 2),
+                        "atr": round(signal.atr_value, 4),
+                        "last_price": float(df["close"].iloc[-1]),
+                    }
+
+            except Exception as e:
+                logger.error("Signal scanner error for %s: %s", sym, str(e)[:100])
+
+
 def _get_sim() -> Simulator:
     if state["simulator"] is None:
         state["simulator"] = Simulator(state["config"])
@@ -241,6 +340,10 @@ def start_bot(body: dict):
     _ws_book_data.clear()
     ws_thread = threading.Thread(target=_start_ws_loop, args=(symbols,), daemon=True)
     ws_thread.start()
+
+    # Start periodic signal scanner in background thread
+    scanner_thread = threading.Thread(target=_signal_scanner_loop, daemon=True)
+    scanner_thread.start()
 
     return {
         "status": "started",
